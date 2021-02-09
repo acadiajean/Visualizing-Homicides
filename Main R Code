@@ -1,0 +1,160 @@
+library(shiny)
+library(leaflet)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(geojsonio)
+
+homicide.temp.data <- read.csv("homicides.and.climate.csv")
+statesAndHoms <- geojson_read("statesWithHomsPerYear.geojson",
+                              what = "sp")
+
+# make an alphabetical list of the cities so that the drop-down menu is alphabetized
+sortedCityStates <- sort(unique(homicide.temp.data$citystate))
+
+# create bins and color palette for chloropleth
+bins <-  c(0, 200, 500, 750, 1000, 1500, 2000, Inf)
+colors <- colorBin(bins = bins,
+                   palette = "YlOrRd",
+                   domain = statesAndHoms@data$homsPerYear)
+
+ui <- fluidPage(
+    # Application title
+    titlePanel("Data Science Homework #4: US Climate and Murder"),
+    
+    "The United States has a murder rate of roughly 5 homicides per 100,000 people,
+    a statistic slightly lower than the world average (1). These homicides are not distributed
+    evenly across the country, as some states and cities have many more murders than others.
+    Reference the map below, where each state is colored according to the average yearly
+    number of murders in that state between 1980 and 2013. Mouse over the state to see this
+    statistic displayed.",
+    
+    leafletOutput(outputId = "map1"),
+    
+    # sliderInput(inputId = "slider1",
+    #             label = "Let's map out these individual homicides.
+    #             Mouse over a tab to display the murder weapon. Choose a year to begin:",
+    #             min = 1980,
+    #             max = 2013,
+    #             value = 1980),
+    # leafletOutput(outputId = "map2"),
+    
+    "Have you ever felt yourself feeling more irritated, with a shorter fuse during summer 
+    heat? If yes, you're not alone. Research has shown that violent crime is correlated
+    with heat (2). Here, we compare the above murder data to simultaneous temperature data to
+    see if this relationship holds up.
+    
+    ",
+    
+    sliderInput(inputId = "slider2",
+                label = "Let's visualize how these homicides can relate to temperature. 
+                Choose a Year:",
+                min = 1980, 
+                max = 2013,
+                value = 1980, # where the slider starts,
+                animate = TRUE,
+                sep = ""),  
+    plotOutput(outputId = "graph1"),
+    
+    selectizeInput(inputId = "cityStateInput",
+                   label = "Alternatively, view by location. Select a city:",
+                   choices = sortedCityStates),
+    #plotOutput(outputId = "graph2"),
+    plotOutput(outputId = "graph3"), 
+    
+    "For more interesting reading on this topic, check out this article:
+    https://www.nytimes.com/2018/09/21/upshot/a-rise-in-murder-lets-talk-about-the-weather.html
+    
+    (1) https://en.wikipedia.org/wiki/Crime_in_the_United_States
+    (2) Anderson, C. A. (2001). Heat and Violence.
+        Current Directions in Psychological Science, 10(1), 33-38.
+        https://doi.org/10.1111/1467-8721.00109"
+)
+
+server <- function(input, output, session) {
+    output$map1 <- renderLeaflet({
+        statesAndHoms %>% 
+            leaflet() %>% 
+            addTiles() %>% # can be taken out to remove the basemap
+            addPolygons(fillColor = ~colors(homsPerYear), 
+                        weight = 2, 
+                        color = "white", 
+                        dashArray = "3",
+                        opacity = .5, 
+                        fillOpacity = 0.7,  
+                        label = ~homsPerYear) %>% 
+            setView(-96, 37.8, 3) %>% 
+            addMiniMap()
+    })
+    
+    output$map2 <- renderLeaflet({
+        homicide.temp.data %>%
+            filter(Year == input$slider1)%>%
+            leaflet() %>%
+            addTiles() %>%
+            addMarkers(lat = ~Latitude,
+                       lng = ~Longitude,
+                       label = ~Weapon,
+                       clusterOptions = markerClusterOptions()) %>% 
+            addMiniMap()
+    })
+    
+    output$graph1 <- renderPlot({
+        homicide.temp.data %>%
+            filter(Year == input$slider2) %>% 
+            ggplot(aes(x = yearly.avg.temp,
+                       y = num.homicides)) +
+            geom_point(aes(color = Region)) +
+            scale_x_continuous(limits = c(-10, 35)) +
+            scale_y_log10(limits = c(1, 1200)) +
+            theme_classic() +
+            ggtitle(paste0("Homicides by Temperature for ", input$slider2)) +
+            xlab("Yearly Average Temperature (\u00B0C)") +
+            ylab("Log 10 Number of Homicides") +
+            theme(title = element_text(size = 20, face = "bold"),
+                  axis.text = element_text(size = 18),
+                  axis.title = element_text(size = 18),
+                  legend.title = element_text(size = 16),
+                  legend.text = element_text(size = 16),
+                  plot.title = element_text(hjust=0.5))+ 
+        geom_text(data = filter(homicide.temp.data,
+                                citystate %in% c("Anchorage, Alaska","Worcester, Massachusetts","Peoria, Illinois"),
+                                Year == input$slider2),
+                  mapping=aes(label=citystate))
+    })
+    
+    output$graph2 <- renderPlot({
+        homicide.temp.data %>% 
+            filter(citystate == input$cityStateInput) %>% 
+            ggplot(aes(x = Year,
+                       y = yearly.avg.temp)) +
+            geom_point(aes(size = num.homicides)) +
+            geom_smooth() +
+            ylab("Yearly Average Temperature (\u00B0C)") +
+            theme_classic() +
+            labs(size = "Number of Homicides") +
+            theme(axis.text = element_text(size = 18),
+                  axis.title = element_text(size = 18))
+    })
+    
+    output$graph3 <- renderPlot({
+        homicide.temp.data %>%
+            filter(citystate == input$cityStateInput)%>%
+            ggplot(mapping=aes(x=Year))+
+            geom_line(aes(y = yearly.avg.temp, colour = "Yearly Average Temperature, \u00B0C"),size=1.5) +
+            geom_line(aes(y = num.homicides, colour = "Number of Homicides"),size=1.5)+
+            xlab("Year") +
+            ylab("") +
+            theme_classic() +
+            labs(colour="") +
+            scale_x_continuous(limits = c(1980,2015)) +
+            ggtitle(paste0("Homicides and Yearly Temperature \n for ", input$cityStateInput)) +
+            theme(axis.text = element_text(size=18),
+                  axis.title = element_text(size=18, face = "bold"),
+                  plot.title = element_text(hjust = 0.5, size=20, face = "bold"),
+                  legend.text = element_text(size = 16))
+        
+    })
+}
+
+shinyApp(ui, server)
